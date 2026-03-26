@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>五子棋 · Gomoku</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <h1>五子棋</h1>
+
+  <div id="game-container">
+
+    <!-- ── Board ── -->
+    <div id="board-wrapper">
+      <div id="board"></div>
+    </div>
+
+    <!-- ── Sidebar ── -->
+    <aside id="sidebar">
+
+      <!-- Status -->
+      <div class="panel">
+        <h2>当前状态</h2>
+        <div id="status-text" class="status-black">黑棋回合</div>
+        <div id="turn-indicator">
+          <div id="turn-stone" class="black"></div>
+          <span id="turn-label">黑棋</span>
+        </div>
+      </div>
+
+      <!-- Score -->
+      <div class="panel">
+        <h2>积分</h2>
+        <div id="score-board">
+          <div class="score-item">
+            <div class="label">⚫ 黑棋</div>
+            <div class="value" id="score-black">0</div>
+          </div>
+          <div class="score-item">
+            <div class="label">⚪ 白棋</div>
+            <div class="value" id="score-white">0</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mode -->
+      <div class="panel">
+        <h2>游戏模式</h2>
+        <div id="mode-selector">
+          <button class="mode-btn active" data-mode="two-player">👥 双人对战</button>
+          <button class="mode-btn" data-mode="vs-ai">🤖 人机对战（执黑）</button>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="panel">
+        <h2>操作</h2>
+        <button class="action-btn" id="btn-undo">↩ 悔棋</button>
+        <button class="action-btn" id="btn-restart">🔄 重新开始</button>
+      </div>
+
+      <!-- Move history -->
+      <div class="panel">
+        <h2>落子记录</h2>
+        <div id="history-list"></div>
+      </div>
+
+    </aside>
+  </div>
+
+  <!-- Win overlay -->
+  <div id="win-overlay">
+    <div id="win-box">
+      <h2 id="win-title"></h2>
+      <p  id="win-msg"></p>
+      <button id="btn-win-restart">再来一局</button>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>

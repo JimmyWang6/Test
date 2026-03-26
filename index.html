@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>网页版五子棋</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #1a1a2e;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      color: #e0e0e0;
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 16px;
+      letter-spacing: 4px;
+      color: #f0c040;
+      text-shadow: 0 2px 8px rgba(240,192,64,.5);
+    }
+
+    #status-bar {
+      margin-bottom: 14px;
+      font-size: 1.1rem;
+      min-height: 1.6em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #player-indicator {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid #999;
+      display: inline-block;
+    }
+
+    #player-indicator.black { background: radial-gradient(circle at 35% 35%, #777, #111); border-color: #555; }
+    #player-indicator.white { background: radial-gradient(circle at 35% 35%, #fff, #ccc); border-color: #aaa; }
+
+    #canvas-wrapper {
+      position: relative;
+      border-radius: 6px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.6);
+    }
+
+    canvas {
+      display: block;
+      cursor: crosshair;
+      border-radius: 6px;
+    }
+
+    #buttons {
+      display: flex;
+      gap: 20px;
+      margin-top: 18px;
+    }
+
+    button {
+      padding: 10px 28px;
+      font-size: 1rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: transform .1s, box-shadow .1s;
+      font-family: inherit;
+    }
+    button:active { transform: scale(.96); }
+
+    #btn-undo {
+      background: #3a3a5c;
+      color: #ccc;
+      border: 1px solid #555;
+    }
+    #btn-undo:hover { background: #4a4a7c; }
+
+    #btn-restart {
+      background: #f0c040;
+      color: #1a1a2e;
+      font-weight: bold;
+      box-shadow: 0 4px 12px rgba(240,192,64,.4);
+    }
+    #btn-restart:hover { background: #f5d060; }
+  </style>
+</head>
+<body>
+  <h1>五子棋</h1>
+
+  <div id="status-bar">
+    <span id="player-indicator" class="black"></span>
+    <span id="status-text">黑棋先手，请落子</span>
+  </div>
+
+  <div id="canvas-wrapper">
+    <canvas id="board"></canvas>
+  </div>
+
+  <div id="buttons">
+    <button id="btn-undo">悔棋</button>
+    <button id="btn-restart">重新开始</button>
+  </div>
+
+  <script>
+    // ─── Constants ────────────────────────────────────────────────────────────
+    const BOARD_SIZE = 15;
+    const CELL       = 40;
+    const PAD        = 40;
+    const CANVAS_SIZE = CELL * (BOARD_SIZE - 1) + PAD * 2;
+    const STONE_R    = CELL * 0.44;
+
+    // Star-point positions (row, col)
+    const STARS = [[3,3],[3,7],[3,11],[7,3],[7,7],[7,11],[11,3],[11,7],[11,11]];
+
+    // ─── Game State ───────────────────────────────────────────────────────────
+    let board        = [];   // 0=empty, 1=black, 2=white
+    let currentPlayer = 1;   // 1=black, 2=white
+    let history      = [];   // [{row, col, player}]
+    let gameOver     = false;
+    let winningCells = [];   // [{row, col}] that form the winning five
+    let hoverCell    = null; // {row, col}
+
+    // ─── Canvas Setup ─────────────────────────────────────────────────────────
+    const canvas = document.getElementById('board');
+    const ctx    = canvas.getContext('2d');
+    canvas.width  = CANVAS_SIZE;
+    canvas.height = CANVAS_SIZE;
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+    function cellToXY(row, col) {
+      return { x: PAD + col * CELL, y: PAD + row * CELL };
+    }
+
+    function xyToCell(x, y) {
+      const col = Math.round((x - PAD) / CELL);
+      const row = Math.round((y - PAD) / CELL);
+      if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) return { row, col };
+      return null;
+    }
+
+    function initBoard() {
+      board = Array.from({ length: BOARD_SIZE }, () => new Array(BOARD_SIZE).fill(0));
+      currentPlayer = 1;
+      history       = [];
+      gameOver      = false;
+      winningCells  = [];
+      hoverCell     = null;
+      updateStatus();
+    }
+
+    // ─── Win Detection ────────────────────────────────────────────────────────
+    const DIRECTIONS = [[0,1],[1,0],[1,1],[1,-1]];
+
+    function countDir(row, col, dr, dc, player) {
+      let count = 0;
+      let r = row + dr, c = col + dc;
+      while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board[r][c] === player) {
+        count++;
+        r += dr;
+        c += dc;
+      }
+      return count;
+    }
+
+    function checkWin(row, col, player) {
+      for (const [dr, dc] of DIRECTIONS) {
+        // Collect cells in both directions
+        const cells = [{ row, col }];
+        for (let d = 1; ; d++) {
+          const r = row + dr * d, c = col + dc * d;
+          if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE || board[r][c] !== player) break;
+          cells.push({ row: r, col: c });
+        }
+        for (let d = 1; ; d++) {
+          const r = row - dr * d, c = col - dc * d;
+          if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE || board[r][c] !== player) break;
+          cells.push({ row: r, col: c });
+        }
+        if (cells.length >= 5) {
+          winningCells = cells;
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // ─── Rendering ────────────────────────────────────────────────────────────
+    function drawBoard() {
+      // Background
+      ctx.fillStyle = '#DCB47C';
+      ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+      // Grid lines
+      ctx.strokeStyle = '#8B6914';
+      ctx.lineWidth   = 1;
+      for (let i = 0; i < BOARD_SIZE; i++) {
+        ctx.beginPath();
+        ctx.moveTo(PAD + i * CELL, PAD);
+        ctx.lineTo(PAD + i * CELL, PAD + (BOARD_SIZE - 1) * CELL);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(PAD, PAD + i * CELL);
+        ctx.lineTo(PAD + (BOARD_SIZE - 1) * CELL, PAD + i * CELL);
+        ctx.stroke();
+      }
+
+      // Star points
+      ctx.fillStyle = '#5C3D0A';
+      for (const [r, c] of STARS) {
+        const { x, y } = cellToXY(r, c);
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Winning overlay
+      if (gameOver && winningCells.length) {
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+      }
+    }
+
+    function drawStone(row, col, player, alpha = 1, scale = 1) {
+      const { x, y } = cellToXY(row, col);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
+
+      const grad = ctx.createRadialGradient(-STONE_R * 0.3, -STONE_R * 0.3, STONE_R * 0.1, 0, 0, STONE_R);
+      if (player === 1) {
+        grad.addColorStop(0, '#888');
+        grad.addColorStop(1, '#111');
+      } else {
+        grad.addColorStop(0, '#fff');
+        grad.addColorStop(1, '#bbb');
+      }
+
+      ctx.beginPath();
+      ctx.arc(0, 0, STONE_R, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawWinHighlight() {
+      for (const { row, col } of winningCells) {
+        const { x, y } = cellToXY(row, col);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, STONE_R + 4, 0, Math.PI * 2);
+        ctx.strokeStyle = '#FF4444';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    function render() {
+      drawBoard();
+
+      // Draw placed stones
+      for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+          if (board[r][c]) drawStone(r, c, board[r][c]);
+        }
+      }
+
+      // Winning highlight
+      if (gameOver && winningCells.length) drawWinHighlight();
+
+      // Hover preview
+      if (!gameOver && hoverCell && board[hoverCell.row][hoverCell.col] === 0) {
+        drawStone(hoverCell.row, hoverCell.col, currentPlayer, 0.35);
+      }
+    }
+
+    // ─── Interactions ─────────────────────────────────────────────────────────
+    function updateStatus() {
+      const indicator = document.getElementById('player-indicator');
+      const text      = document.getElementById('status-text');
+      if (gameOver) {
+        if (winningCells.length) {
+          indicator.className = currentPlayer === 1 ? 'white' : 'black'; // winner was previous player
+          text.textContent    = (currentPlayer === 2 ? '黑棋' : '白棋') + ' 获胜！🎉';
+          indicator.className = currentPlayer === 2 ? 'black' : 'white';
+        } else {
+          text.textContent = '平局！';
+        }
+        return;
+      }
+      indicator.className = currentPlayer === 1 ? 'black' : 'white';
+      text.textContent    = (currentPlayer === 1 ? '黑棋' : '白棋') + ' 落子中…';
+    }
+
+    function placeStone(row, col) {
+      if (gameOver || board[row][col] !== 0) return;
+
+      board[row][col] = currentPlayer;
+      history.push({ row, col, player: currentPlayer });
+
+      if (checkWin(row, col, currentPlayer)) {
+        gameOver = true;
+        render();
+        updateStatus();
+        return;
+      }
+
+      // Check draw
+      const isDraw = board.every(r => r.every(c => c !== 0));
+      if (isDraw) {
+        gameOver = true;
+        render();
+        updateStatus();
+        return;
+      }
+
+      currentPlayer = currentPlayer === 1 ? 2 : 1;
+      updateStatus();
+      render();
+    }
+
+    canvas.addEventListener('click', e => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width  / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const cell = xyToCell((e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY);
+      if (cell) placeStone(cell.row, cell.col);
+    });
+
+    canvas.addEventListener('mousemove', e => {
+      if (gameOver) return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width  / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const cell = xyToCell((e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY);
+      hoverCell = cell;
+      render();
+    });
+
+    canvas.addEventListener('mouseleave', () => { hoverCell = null; render(); });
+
+    document.getElementById('btn-undo').addEventListener('click', () => {
+      if (gameOver || history.length === 0) return;
+      const last = history.pop();
+      board[last.row][last.col] = 0;
+      currentPlayer = last.player;
+      winningCells  = [];
+      updateStatus();
+      render();
+    });
+
+    document.getElementById('btn-restart').addEventListener('click', () => {
+      initBoard();
+      render();
+    });
+
+    // ─── Bootstrap ────────────────────────────────────────────────────────────
+    initBoard();
+    render();
+  </script>
+</body>
+</html>

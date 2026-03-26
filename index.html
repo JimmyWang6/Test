@@ -119,19 +119,39 @@
     // Star-point positions (row, col)
     const STARS = [[3,3],[3,7],[3,11],[7,3],[7,7],[7,11],[11,3],[11,7],[11,11]];
 
-    // ─── Game State ───────────────────────────────────────────────────────────
-    let board        = [];   // 0=empty, 1=black, 2=white
-    let currentPlayer = 1;   // 1=black, 2=white
-    let history      = [];   // [{row, col, player}]
+    // ─── Local UI State (mirror of server state) ─────────────────────────────
+    let gameId       = null;
+    let board        = [];
+    let currentPlayer = 1;
     let gameOver     = false;
-    let winningCells = [];   // [{row, col}] that form the winning five
-    let hoverCell    = null; // {row, col}
+    let winningCells = [];
+    let hoverCell    = null;
+    let busy         = false;  // prevent double-clicks during fetch
 
     // ─── Canvas Setup ─────────────────────────────────────────────────────────
     const canvas = document.getElementById('board');
     const ctx    = canvas.getContext('2d');
     canvas.width  = CANVAS_SIZE;
     canvas.height = CANVAS_SIZE;
+
+    // ─── API Layer ────────────────────────────────────────────────────────────
+    async function api(method, path, body) {
+      const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) opts.body = JSON.stringify(body);
+      const res  = await fetch(path, opts);
+      return res.json();
+    }
+
+    // ─── State Sync ───────────────────────────────────────────────────────────
+    function applyState(data) {
+      gameId        = data.id;
+      board         = data.board;
+      currentPlayer = data.currentPlayer;
+      winningCells  = data.winningCells || [];
+      gameOver      = data.status !== 'playing';
+      updateStatus(data.status, data.winner);
+      render();
+    }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
     function cellToXY(row, col) {
@@ -145,59 +165,11 @@
       return null;
     }
 
-    function initBoard() {
-      board = Array.from({ length: BOARD_SIZE }, () => new Array(BOARD_SIZE).fill(0));
-      currentPlayer = 1;
-      history       = [];
-      gameOver      = false;
-      winningCells  = [];
-      hoverCell     = null;
-      updateStatus();
-    }
-
-    // ─── Win Detection ────────────────────────────────────────────────────────
-    const DIRECTIONS = [[0,1],[1,0],[1,1],[1,-1]];
-
-    function countDir(row, col, dr, dc, player) {
-      let count = 0;
-      let r = row + dr, c = col + dc;
-      while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board[r][c] === player) {
-        count++;
-        r += dr;
-        c += dc;
-      }
-      return count;
-    }
-
-    function checkWin(row, col, player) {
-      for (const [dr, dc] of DIRECTIONS) {
-        // Collect cells in both directions
-        const cells = [{ row, col }];
-        for (let d = 1; ; d++) {
-          const r = row + dr * d, c = col + dc * d;
-          if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE || board[r][c] !== player) break;
-          cells.push({ row: r, col: c });
-        }
-        for (let d = 1; ; d++) {
-          const r = row - dr * d, c = col - dc * d;
-          if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE || board[r][c] !== player) break;
-          cells.push({ row: r, col: c });
-        }
-        if (cells.length >= 5) {
-          winningCells = cells;
-          return true;
-        }
-      }
-      return false;
-    }
-
     // ─── Rendering ────────────────────────────────────────────────────────────
     function drawBoard() {
-      // Background
       ctx.fillStyle = '#DCB47C';
       ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
-      // Grid lines
       ctx.strokeStyle = '#8B6914';
       ctx.lineWidth   = 1;
       for (let i = 0; i < BOARD_SIZE; i++) {
@@ -211,7 +183,6 @@
         ctx.stroke();
       }
 
-      // Star points
       ctx.fillStyle = '#5C3D0A';
       for (const [r, c] of STARS) {
         const { x, y } = cellToXY(r, c);
@@ -220,19 +191,17 @@
         ctx.fill();
       }
 
-      // Winning overlay
       if (gameOver && winningCells.length) {
         ctx.fillStyle = 'rgba(0,0,0,0.25)';
         ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
       }
     }
 
-    function drawStone(row, col, player, alpha = 1, scale = 1) {
+    function drawStone(row, col, player, alpha = 1) {
       const { x, y } = cellToXY(row, col);
       ctx.save();
       ctx.globalAlpha = alpha;
       ctx.translate(x, y);
-      ctx.scale(scale, scale);
 
       const grad = ctx.createRadialGradient(-STONE_R * 0.3, -STONE_R * 0.3, STONE_R * 0.1, 0, 0, STONE_R);
       if (player === 1) {
@@ -265,106 +234,91 @@
 
     function render() {
       drawBoard();
-
-      // Draw placed stones
       for (let r = 0; r < BOARD_SIZE; r++) {
         for (let c = 0; c < BOARD_SIZE; c++) {
-          if (board[r][c]) drawStone(r, c, board[r][c]);
+          if (board[r] && board[r][c]) drawStone(r, c, board[r][c]);
         }
       }
-
-      // Winning highlight
       if (gameOver && winningCells.length) drawWinHighlight();
-
-      // Hover preview
-      if (!gameOver && hoverCell && board[hoverCell.row][hoverCell.col] === 0) {
+      if (!gameOver && hoverCell && board[hoverCell.row] && board[hoverCell.row][hoverCell.col] === 0) {
         drawStone(hoverCell.row, hoverCell.col, currentPlayer, 0.35);
       }
     }
 
-    // ─── Interactions ─────────────────────────────────────────────────────────
-    function updateStatus() {
+    // ─── Status Bar ───────────────────────────────────────────────────────────
+    function updateStatus(status, winner) {
       const indicator = document.getElementById('player-indicator');
       const text      = document.getElementById('status-text');
-      if (gameOver) {
-        if (winningCells.length) {
-          indicator.className = currentPlayer === 1 ? 'white' : 'black'; // winner was previous player
-          text.textContent    = (currentPlayer === 2 ? '黑棋' : '白棋') + ' 获胜！🎉';
-          indicator.className = currentPlayer === 2 ? 'black' : 'white';
-        } else {
-          text.textContent = '平局！';
-        }
-        return;
+      if (status === 'black_win') {
+        indicator.className = 'black';
+        text.textContent    = '黑棋 获胜！🎉';
+      } else if (status === 'white_win') {
+        indicator.className = 'white';
+        text.textContent    = '白棋 获胜！🎉';
+      } else if (status === 'draw') {
+        indicator.className = '';
+        text.textContent    = '平局！';
+      } else {
+        indicator.className = currentPlayer === 1 ? 'black' : 'white';
+        text.textContent    = (currentPlayer === 1 ? '黑棋' : '白棋') + ' 落子中…';
       }
-      indicator.className = currentPlayer === 1 ? 'black' : 'white';
-      text.textContent    = (currentPlayer === 1 ? '黑棋' : '白棋') + ' 落子中…';
     }
 
-    function placeStone(row, col) {
-      if (gameOver || board[row][col] !== 0) return;
-
-      board[row][col] = currentPlayer;
-      history.push({ row, col, player: currentPlayer });
-
-      if (checkWin(row, col, currentPlayer)) {
-        gameOver = true;
-        render();
-        updateStatus();
-        return;
-      }
-
-      // Check draw
-      const isDraw = board.every(r => r.every(c => c !== 0));
-      if (isDraw) {
-        gameOver = true;
-        render();
-        updateStatus();
-        return;
-      }
-
-      currentPlayer = currentPlayer === 1 ? 2 : 1;
-      updateStatus();
-      render();
-    }
-
-    canvas.addEventListener('click', e => {
+    // ─── Event Handlers ───────────────────────────────────────────────────────
+    canvas.addEventListener('click', async e => {
+      if (gameOver || busy || !gameId) return;
       const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width  / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const cell = xyToCell((e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY);
-      if (cell) placeStone(cell.row, cell.col);
+      const cell = xyToCell(
+        (e.clientX - rect.left) * (canvas.width  / rect.width),
+        (e.clientY - rect.top)  * (canvas.height / rect.height)
+      );
+      if (!cell) return;
+      busy = true;
+      const res = await api('POST', `/api/games/${gameId}/move`, { row: cell.row, col: cell.col });
+      busy = false;
+      if (res.success) applyState(res.data);
     });
 
     canvas.addEventListener('mousemove', e => {
       if (gameOver) return;
       const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width  / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const cell = xyToCell((e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY);
+      const cell = xyToCell(
+        (e.clientX - rect.left) * (canvas.width  / rect.width),
+        (e.clientY - rect.top)  * (canvas.height / rect.height)
+      );
       hoverCell = cell;
       render();
     });
 
     canvas.addEventListener('mouseleave', () => { hoverCell = null; render(); });
 
-    document.getElementById('btn-undo').addEventListener('click', () => {
-      if (gameOver || history.length === 0) return;
-      const last = history.pop();
-      board[last.row][last.col] = 0;
-      currentPlayer = last.player;
-      winningCells  = [];
-      updateStatus();
-      render();
+    document.getElementById('btn-undo').addEventListener('click', async () => {
+      if (busy || !gameId) return;
+      busy = true;
+      const res = await api('POST', `/api/games/${gameId}/undo`);
+      busy = false;
+      if (res.success) applyState(res.data);
     });
 
-    document.getElementById('btn-restart').addEventListener('click', () => {
-      initBoard();
-      render();
+    document.getElementById('btn-restart').addEventListener('click', async () => {
+      if (busy || !gameId) return;
+      busy = true;
+      const res = await api('POST', `/api/games/${gameId}/reset`);
+      busy = false;
+      if (res.success) applyState(res.data);
     });
 
     // ─── Bootstrap ────────────────────────────────────────────────────────────
-    initBoard();
-    render();
+    (async () => {
+      const res = await api('POST', '/api/games');
+      if (res.success) {
+        applyState(res.data);
+      } else {
+        // Fallback: render empty board if server unavailable
+        board = Array.from({ length: BOARD_SIZE }, () => new Array(BOARD_SIZE).fill(0));
+        render();
+      }
+    })();
   </script>
 </body>
 </html>
